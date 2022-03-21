@@ -1,26 +1,54 @@
 # Use the latest 2.1 version of CircleCI pipeline process engine.
 # See: https://circleci.com/docs/2.0/configuration-reference
 version: 2.1
-
+orbs:
+  ecr-branch-sha1: caring-dev/ecr-branch-sha1@0.12.0
+  rails-test-tools: caring-dev/rails-test-tools@0.4.0
 # Define a job to be invoked later in a workflow.
 # See: https://circleci.com/docs/2.0/configuration-reference/#jobs
 jobs:
-  say-hello:
-    # Specify the execution environment. You can specify an image from Dockerhub or use one of our Convenience Images from CircleCI's Developer Hub.
-    # See: https://circleci.com/docs/2.0/configuration-reference/#docker-machine-macos-windows-executor
-    docker:
-      - image: cimg/base:stable
-    # Add steps to the job
-    # See: https://circleci.com/docs/2.0/configuration-reference/#steps
+  test_rspec_and_unit:
+    executor:
+      name: rails-test-tools/docker-mysql-redis
+      docker-image: ${AWS_ECR_URL}/dir:${CIRCLE_SHA1}
+      mysql-version: "8.0"
+    parallelism: 9
     steps:
-      - checkout
+      - rails-test-tools/wait-for-mysql
       - run:
-          name: "Say hello"
-          command: "echo Hello, World!"
+          command: SKIP_DB_CONNECT=true bundle exec rake db:setup
+      - run:
+          command: ruby ./script/run-all-ruby-tests.rb
+      - store_test_results:
+          path: test-results
+    environment:
+      CODECOV_TOKEN: b20dcc1b-17d9-400d-8b50-dddb5ecf3208
+  graphql_schema_lint:
+    executor:
+      name: rails-test-tools/docker-mysql-redis
+      docker-image: ${AWS_ECR_URL}/dir:${CIRCLE_SHA1}
+      mysql-version: "8.0"
+    environment:
+      RAILS_ENV: development
+    steps:
+      - rails-test-tools/wait-for-mysql
+      - run:
+          command: SKIP_DB_CONNECT=true bundle exec rake db:setup
+      - run:
+          command: bundle exec rails runner ./script/lint-graphql.rb
 
-# Invoke jobs via workflows
-# See: https://circleci.com/docs/2.0/configuration-reference/#workflows
 workflows:
-  say-hello-workflow:
+  directory_ci:
     jobs:
-      - say-hello
+      - ecr-branch-sha1/build_and_push_image:
+          context: docker
+          aws_account_url: ${AWS_ECR_URL}
+          aws_repo_name: dir
+      - test_rspec_and_unit:
+          context: docker
+          requires:
+            - ecr-branch-sha1/build_and_push_image
+      - graphql_schema_lint:
+          context: docker
+          requires:
+            - ecr-branch-sha1/build_and_push_image
